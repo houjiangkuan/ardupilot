@@ -81,22 +81,9 @@
 
 #define MAGNETOMETER ENABLED
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM2
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
+#if HAL_CPU_CLASS < HAL_CPU_CLASS_75
  # define PARACHUTE DISABLED
  # define AC_RALLY DISABLED
-#elif CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
-#elif CONFIG_HAL_BOARD == HAL_BOARD_PX4
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
-#elif CONFIG_HAL_BOARD == HAL_BOARD_FLYMAPLE
- # define CONFIG_ADC        DISABLED
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
-#elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
- # define CONFIG_ADC        DISABLED
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
-#elif CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
 #endif
 
 #if HAL_CPU_CLASS < HAL_CPU_CLASS_75 || CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
@@ -191,30 +178,6 @@
 //////////////////////////////////////////////////////////////////////////////
 // Sonar
 //
-
-#ifndef CONFIG_SONAR_SOURCE
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ADC
-#endif
-
-#if CONFIG_SONAR_SOURCE == SONAR_SOURCE_ADC && CONFIG_ADC == DISABLED
- # warning Cannot use ADC for CONFIG_SONAR_SOURCE, becaude CONFIG_ADC is DISABLED
- # warning Defaulting CONFIG_SONAR_SOURCE to ANALOG_PIN
- # undef CONFIG_SONAR_SOURCE
- # define CONFIG_SONAR_SOURCE SONAR_SOURCE_ANALOG_PIN
-#endif
-
-#if CONFIG_SONAR_SOURCE == SONAR_SOURCE_ADC
- # ifndef CONFIG_SONAR_SOURCE_ADC_CHANNEL
-  #  define CONFIG_SONAR_SOURCE_ADC_CHANNEL 7
- # endif
-#elif CONFIG_SONAR_SOURCE == SONAR_SOURCE_ANALOG_PIN
- # ifndef CONFIG_SONAR_SOURCE_ANALOG_PIN
-  #  define CONFIG_SONAR_SOURCE_ANALOG_PIN 0
- # endif
-#else
- # warning Invalid value for CONFIG_SONAR_SOURCE, disabling sonar
- # define CONFIG_SONAR DISABLED
-#endif
 
 #ifndef CONFIG_SONAR
  # define CONFIG_SONAR ENABLED
@@ -316,6 +279,17 @@
 #ifndef FS_GCS_TIMEOUT_MS
  # define FS_GCS_TIMEOUT_MS             5000    // gcs failsafe triggers after 5 seconds with no GCS heartbeat
 #endif
+
+// Radio failsafe while using RC_override
+#ifndef FS_RADIO_RC_OVERRIDE_TIMEOUT_MS
+ # define FS_RADIO_RC_OVERRIDE_TIMEOUT_MS  2000    // RC Radio failsafe triggers after 2 seconds while using RC_override from ground station
+#endif
+
+// Radio failsafe
+#ifndef FS_RADIO_TIMEOUT_MS
+ #define FS_RADIO_TIMEOUT_MS            500     // RC Radio Failsafe triggers after 500 miliseconds with No RC Input
+#endif
+
 // possible values for FS_GCS parameter
 #define FS_GCS_DISABLED                     0
 #define FS_GCS_ENABLED_ALWAYS_RTL           1
@@ -324,6 +298,12 @@
 // pre-arm check max velocity
 #ifndef PREARM_MAX_VELOCITY_CMS
  # define PREARM_MAX_VELOCITY_CMS           50.0f   // vehicle must be travelling under 50cm/s before arming
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
+//  EKF Checker
+#ifndef EKFCHECK_THRESHOLD_DEFAULT
+ # define EKFCHECK_THRESHOLD_DEFAULT    0.6f    // EKF checker's default compass and velocity variance above which the EKF's horizontal position will be considered bad
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -583,7 +563,7 @@
  # define RATE_ROLL_D        		0.004f
 #endif
 #ifndef RATE_ROLL_IMAX
- # define RATE_ROLL_IMAX         	500
+ # define RATE_ROLL_IMAX         	1000
 #endif
 
 #ifndef RATE_PITCH_P
@@ -609,7 +589,7 @@
  # define RATE_YAW_D              	0.000f
 #endif
 #ifndef RATE_YAW_IMAX
- # define RATE_YAW_IMAX            	800
+ # define RATE_YAW_IMAX            	1000
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -765,6 +745,11 @@
 // use this to completely disable the CLI
 #ifndef CLI_ENABLED
   #  define CLI_ENABLED           ENABLED
+#endif
+
+//use this to completely disable FRSKY TELEM
+#ifndef FRSKY_TELEM_ENABLED
+  #  define FRSKY_TELEM_ENABLED          ENABLED
 #endif
 
 /*

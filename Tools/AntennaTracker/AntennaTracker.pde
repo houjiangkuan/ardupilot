@@ -54,6 +54,8 @@
 
 #include <AP_Vehicle.h>
 #include <AP_Mission.h>
+#include <AP_Terrain.h>
+#include <AP_Rally.h>
 #include <AP_Notify.h>      // Notify library
 #include <AP_BattMonitor.h> // Battery monitor library
 #include <AP_Airspeed.h>

@@ -17,6 +17,8 @@ CLEAN_BUILD=0
 START_ANTENNA_TRACKER=0
 WIPE_EEPROM=0
 REVERSE_THROTTLE=0
+NO_REBUILD=0
+TRACKER_ARGS=""
 
 usage()
 {
@@ -30,9 +32,11 @@ Options:
     -G               use gdb for debugging ardupilot
     -g               use gdb for debugging ardupilot, but don't auto-start
     -T               start an antenna tracker instance
+    -A               pass arguments to antenna tracker
     -t               set antenna tracker start location
     -L               select start location from Tools/autotest/locations.txt
     -c               do a make clean before building
+    -N               don't rebuild before starting ardupilot
     -w               wipe EEPROM and reload parameters
     -R               reverse throttle in plane
     -f FRAME         set aircraft frame type
@@ -55,7 +59,7 @@ EOF
 
 
 # parse options. Thanks to http://wiki.bash-hackers.org/howto/getopts_tutorial
-while getopts ":I:VgGcj:TL:v:hwf:R" opt; do
+while getopts ":I:VgGcj:TA:t:L:v:hwf:RN" opt; do
   case $opt in
     v)
       VEHICLE=$OPTARG
@@ -66,8 +70,14 @@ while getopts ":I:VgGcj:TL:v:hwf:R" opt; do
     V)
       USE_VALGRIND=1
       ;;
+    N)
+      NO_REBUILD=1
+      ;;
     T)
       START_ANTENNA_TRACKER=1
+      ;;
+    A)
+      TRACKER_ARGS="$OPTARG"
       ;;
     R)
       REVERSE_THROTTLE=1
@@ -180,6 +190,7 @@ case $FRAME in
 esac
 
 autotest=$(dirname $(readlink -e $0))
+if [ $NO_REBUILD == 0 ]; then
 pushd $autotest/../../$VEHICLE || {
     echo "Failed to change to vehicle directory for $VEHICLE"
     usage
@@ -193,6 +204,7 @@ make $BUILD_TARGET -j$NUM_PROCS || {
     make $BUILD_TARGET -j$NUM_PROCS
 }
 popd
+fi
 
 # get the location information
 SIMHOME=$(cat $autotest/locations.txt | grep -i "^$LOCATION=" | cut -d= -f2)
@@ -226,7 +238,7 @@ if [ $START_ANTENNA_TRACKER == 1 ]; then
     TRACKER_UARTA="tcp:127.0.0.1:"$((5760+10*$TRACKER_INSTANCE))
     cmd="nice /tmp/AntennaTracker.build/AntennaTracker.elf -I1"
     $autotest/run_in_terminal_window.sh "AntennaTracker" $cmd || exit 1
-    $autotest/run_in_terminal_window.sh "pysim(Tracker)" nice $autotest/pysim/sim_tracker.py --home=$TRACKER_HOME --simin=$TRACKIN_PORT --simout=$TRACKOUT_PORT || exit 1
+    $autotest/run_in_terminal_window.sh "pysim(Tracker)" nice $autotest/pysim/sim_tracker.py --home=$TRACKER_HOME --simin=$TRACKIN_PORT --simout=$TRACKOUT_PORT $TRACKER_ARGS || exit 1
     popd
 fi
 
@@ -247,7 +259,7 @@ case $VEHICLE in
         fi
         ;;
     ArduCopter)
-        RUNSIM="nice $autotest/pysim/sim_multicopter.py --home=$SIMHOME $EXTRA_SIM"
+        RUNSIM="nice $autotest/pysim/sim_multicopter.py --home=$SIMHOME --simin=$SIMIN_PORT --simout=$SIMOUT_PORT --fgout=$FG_PORT $EXTRA_SIM"
         PARMS="copter_params.parm"
         ;;
     APMrover2)

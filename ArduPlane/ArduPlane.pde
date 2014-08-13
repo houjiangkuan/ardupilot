@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#define THISFIRMWARE "ArduPlane V3.0.4-beta3"
+#define THISFIRMWARE "ArduPlane V3.1.0-beta2"
 /*
    Lead developer: Andrew Tridgell
  
@@ -51,6 +51,7 @@
 #include <AP_Relay.h>       // APM relay
 #include <AP_Camera.h>          // Photo or video camera
 #include <AP_Airspeed.h>
+#include <AP_Terrain.h>
 
 #include <APM_OBC.h>
 #include <APM_Control.h>
@@ -78,6 +79,7 @@
 
 #include <AP_Arming.h>
 #include <AP_BoardConfig.h>
+#include <AP_Frsky_Telem.h>
 #include <AP_ServoRelayEvents.h>
 
 #include <AP_Rally.h>
@@ -460,6 +462,12 @@ static int32_t altitude_error_cm;
 static AP_BattMonitor battery;
 
 ////////////////////////////////////////////////////////////////////////////////
+// FrSky telemetry support
+#if FRSKY_TELEM_ENABLED == ENABLED
+static AP_Frsky_Telem frsky_telemetry(ahrs, battery);
+#endif
+
+////////////////////////////////////////////////////////////////////////////////
 // Airspeed Sensors
 ////////////////////////////////////////////////////////////////////////////////
 AP_Airspeed airspeed(aparm);
@@ -507,11 +515,21 @@ static struct {
 ////////////////////////////////////////////////////////////////////////////////
 static struct {
     // Flag for using gps ground course instead of INS yaw.  Set false when takeoff command in process.
-    bool takeoff_complete;
+    bool takeoff_complete:1;
 
     // Flag to indicate if we have landed.
     // Set land_complete if we are within 2 seconds distance or within 3 meters altitude of touchdown
-    bool land_complete;
+    bool land_complete:1;
+
+    // should we fly inverted?
+    bool inverted_flight:1;
+
+    // should we disable cross-tracking for the next waypoint?
+    bool next_wp_no_crosstrack:1;
+
+    // should we use cross-tracking for this waypoint?
+    bool no_crosstrack:1;
+
     // Altitude threshold to complete a takeoff command in autonomous modes.  Centimeters
     int32_t takeoff_altitude_cm;
 
@@ -527,18 +545,17 @@ static struct {
 
     // turn angle for next leg of mission
     float next_turn_angle;
-
-    // should we fly inverted?
-    bool inverted_flight;
 } auto_state = {
     takeoff_complete : true,
     land_complete : false,
+    inverted_flight  : false,
+    next_wp_no_crosstrack : true,
+    no_crosstrack : true,
     takeoff_altitude_cm : 0,
     takeoff_pitch_cd : 0,
     highest_airspeed : 0,
     initial_pitch_cd : 0,
-    next_turn_angle  : 90.0f,
-    inverted_flight  : false
+    next_turn_angle  : 90.0f
 };
 
 // true if we are in an auto-throttle mode, which means
@@ -574,6 +591,12 @@ AP_Mission mission(ahrs,
                    &verify_command_callback, 
                    &exit_mission_callback, 
                    MISSION_START_BYTE, MISSION_END_BYTE);
+
+////////////////////////////////////////////////////////////////////////////////
+// terrain handling
+#if AP_TERRAIN_AVAILABLE
+AP_Terrain terrain(ahrs, mission, rally);
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Outback Challenge Failsafe Support
@@ -648,12 +671,28 @@ static struct Location guided_WP_loc;
 static struct AP_Mission::Mission_Command auto_rtl_command;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Altitude / Climb rate control
-////////////////////////////////////////////////////////////////////////////////
-// The current desired altitude.  Altitude is linearly ramped between waypoints.  Centimeters
-static int32_t target_altitude_cm;
-// Altitude difference between previous and current waypoint.  Centimeters
-static int32_t offset_altitude_cm;
+// Altitude control
+static struct {
+    // target altitude above sea level in cm. Used for barometric
+    // altitude navigation
+    int32_t amsl_cm;
+
+    // Altitude difference between previous and current waypoint in
+    // centimeters. Used for glide slope handling
+    int32_t offset_cm;
+
+#if AP_TERRAIN_AVAILABLE
+    // are we trying to follow terrain?
+    bool terrain_following;
+
+    // target altitude above terrain in cm, valid if terrain_following
+    // is set
+    int32_t terrain_alt_cm;
+
+    // lookahead value for height error reporting
+    float lookahead;
+#endif
+} target_altitude;
 
 ////////////////////////////////////////////////////////////////////////////////
 // INS variables
@@ -726,7 +765,7 @@ static const AP_Scheduler::Task scheduler_tasks[] PROGMEM = {
     { update_compass,         5,   1200 },
     { read_airspeed,          5,   1200 },
     { update_alt,             5,   3400 },
-    { calc_altitude_error,    5,   1000 },
+    { adjust_altitude_target, 5,   1000 },
     { obc_fs_check,           5,   1000 },
     { gcs_update,             1,   1700 },
     { gcs_data_stream_send,   1,   3000 },
@@ -746,6 +785,10 @@ static const AP_Scheduler::Task scheduler_tasks[] PROGMEM = {
     { compass_save,        3000,   2500 },
     { update_logging1,        5,   1700 },
     { update_logging2,        5,   1700 },
+#if FRSKY_TELEM_ENABLED == ENABLED
+    { telemetry_send,        10,    100 },	
+#endif
+
 };
 
 // setup the var_info table
@@ -760,8 +803,6 @@ void setup() {
     AP_Notify::flags.failsafe_battery = false;
 
     notify.init(false);
-
-    battery.init();
 
     rssi_analog_source = hal.analogin->channel(ANALOG_INPUT_NONE);
 
@@ -972,6 +1013,13 @@ static void one_second_loop()
     // update notify flags
     AP_Notify::flags.pre_arm_check = arming.pre_arm_checks(false);
     AP_Notify::flags.armed = arming.is_armed() || arming.arming_required() == AP_Arming::NO;
+
+#if AP_TERRAIN_AVAILABLE
+    terrain.update();
+    if (should_log(MASK_LOG_GPS)) {
+        terrain.log_terrain_data(DataFlash);
+    }
+#endif
 }
 
 static void log_perf_info()
@@ -1245,6 +1293,7 @@ static void update_flight_mode(void)
         } else {
             nav_pitch_cd = -(pitch_input * pitch_limit_min_cd);
         }
+        adjust_nav_pitch_throttle();
         nav_pitch_cd = constrain_int32(nav_pitch_cd, pitch_limit_min_cd, aparm.pitch_limit_max_cd.get());
         if (fly_inverted()) {
             nav_pitch_cd = -nav_pitch_cd;
@@ -1356,10 +1405,14 @@ static void update_navigation()
     }
 }
 
-static void update_flight_stage(AP_SpdHgtControl::FlightStage fs) {
+/*
+  set the flight stage
+ */
+static void set_flight_stage(AP_SpdHgtControl::FlightStage fs) 
+{
     //if just now entering land flight stage
     if (fs == AP_SpdHgtControl::FLIGHT_LAND_APPROACH &&
-            flight_stage != AP_SpdHgtControl::FLIGHT_LAND_APPROACH) {
+        flight_stage != AP_SpdHgtControl::FLIGHT_LAND_APPROACH) {
 
 #if GEOFENCE_ENABLED == ENABLED 
         if (g.fence_autoenable == 1) {
@@ -1370,7 +1423,6 @@ static void update_flight_stage(AP_SpdHgtControl::FlightStage fs) {
             }
         }
 #endif
-
     }
     
     flight_stage = fs;
@@ -1385,24 +1437,32 @@ static void update_alt()
 
     geofence_check(true);
 
+    update_flight_stage();
+}
+
+/*
+  recalculate the flight_stage
+ */
+static void update_flight_stage(void)
+{
     // Update the speed & height controller states
     if (auto_throttle_mode && !throttle_suppressed) {        
         if (control_mode==AUTO) {
             if (auto_state.takeoff_complete == false) {
-                update_flight_stage(AP_SpdHgtControl::FLIGHT_TAKEOFF);
+                set_flight_stage(AP_SpdHgtControl::FLIGHT_TAKEOFF);
             } else if (mission.get_current_nav_cmd().id == MAV_CMD_NAV_LAND && 
                        auto_state.land_complete == true) {
-                update_flight_stage(AP_SpdHgtControl::FLIGHT_LAND_FINAL);
+                set_flight_stage(AP_SpdHgtControl::FLIGHT_LAND_FINAL);
             } else if (mission.get_current_nav_cmd().id == MAV_CMD_NAV_LAND) {
-                update_flight_stage(AP_SpdHgtControl::FLIGHT_LAND_APPROACH); 
+                set_flight_stage(AP_SpdHgtControl::FLIGHT_LAND_APPROACH); 
             } else {
-                update_flight_stage(AP_SpdHgtControl::FLIGHT_NORMAL);
+                set_flight_stage(AP_SpdHgtControl::FLIGHT_NORMAL);
             }
         } else {
-            update_flight_stage(AP_SpdHgtControl::FLIGHT_NORMAL);
+            set_flight_stage(AP_SpdHgtControl::FLIGHT_NORMAL);
         }
 
-        SpdHgt_Controller->update_pitch_throttle(target_altitude_cm - home.alt + (int32_t(g.alt_offset)*100), 
+        SpdHgt_Controller->update_pitch_throttle(relative_target_altitude_cm(),
                                                  target_airspeed_cm,
                                                  flight_stage,
                                                  auto_state.takeoff_pitch_cd,
