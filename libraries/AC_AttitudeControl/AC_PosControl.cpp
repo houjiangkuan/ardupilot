@@ -84,6 +84,10 @@ void AC_PosControl::set_dt(float delta_sec)
 
     // update rate controller's d filter
     _pid_alt_accel.set_d_lpf_alpha(POSCONTROL_ACCEL_Z_DTERM_FILTER, _dt);
+
+    // update rate z-axis velocity error and accel error filters
+    _vel_error_filter.set_cutoff_frequency(_dt,POSCONTROL_VEL_ERROR_CUTOFF_FREQ);
+    _accel_error_filter.set_cutoff_frequency(_dt,POSCONTROL_ACCEL_ERROR_CUTOFF_FREQ);
 }
 
 /// set_speed_z - sets maximum climb and descent rates
@@ -334,10 +338,12 @@ void AC_PosControl::rate_to_accel_z()
     if (_flags.reset_rate_to_accel_z) {
         // Reset Filter
         _vel_error.z = 0;
+        _vel_error_filter.reset(0);
         desired_accel = 0;
         _flags.reset_rate_to_accel_z = false;
     } else {
-        _vel_error.z = (_vel_target.z - curr_vel.z);
+        // calculate rate error and filter with cut off frequency of 2 Hz
+        _vel_error.z = _vel_error_filter.apply(_vel_target.z - curr_vel.z);
     }
 
     // calculate p
@@ -365,11 +371,11 @@ void AC_PosControl::accel_to_throttle(float accel_target_z)
     if (_flags.reset_accel_to_throttle) {
         // Reset Filter
         _accel_error.z = 0;
+        _accel_error_filter.reset(0);
         _flags.reset_accel_to_throttle = false;
     } else {
         // calculate accel error and Filter with fc = 2 Hz
-        // To-Do: replace constant below with one that is adjusted for update rate
-        _accel_error.z = _accel_error.z + 0.11164f * (constrain_float(accel_target_z - z_accel_meas, -32000, 32000) - _accel_error.z);
+        _accel_error.z = _accel_error_filter.apply(constrain_float(accel_target_z - z_accel_meas, -32000, 32000));
     }
 
     // separately calculate p, i, d values for logging
@@ -387,11 +393,8 @@ void AC_PosControl::accel_to_throttle(float accel_target_z)
     // get d term
     d = _pid_alt_accel.get_d(_accel_error.z, _dt);
 
-    // To-Do: pull min/max throttle from motors
-    // To-Do: we had a contraint here but it's now removed, is this ok?  with the motors library handle it ok?
+    // send throttle to attitude controller with angle boost
     _attitude_control.set_throttle_out((int16_t)p+i+d+_throttle_hover, true);
-    
-    // to-do add back in PID logging?
 }
 
 ///

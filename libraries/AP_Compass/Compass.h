@@ -33,7 +33,7 @@
 #elif CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
 # define MAG_BOARD_ORIENTATION ROTATION_NONE
 #elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
-# define MAG_BOARD_ORIENTATION ROTATION_YAW_90
+# define MAG_BOARD_ORIENTATION ROTATION_NONE
 #elif CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
 # define MAG_BOARD_ORIENTATION ROTATION_NONE
 #else
@@ -50,25 +50,6 @@
 #define COMPASS_MAX_INSTANCES 2
 #else
 #define COMPASS_MAX_INSTANCES 1
-#endif
-
-// default compass device ids for each board type to most common set-up to reduce eeprom usage
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
-# define COMPASS_EXPECTED_DEV_ID  73225 // external hmc5883
-# define COMPASS_EXPECTED_DEV_ID2 -1    // internal ldm303d
-# define COMPASS_EXPECTED_DEV_ID3 0
-#elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
-# define COMPASS_EXPECTED_DEV_ID  0
-# define COMPASS_EXPECTED_DEV_ID2 0
-# define COMPASS_EXPECTED_DEV_ID3 0
-#elif CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
-# define COMPASS_EXPECTED_DEV_ID  0
-# define COMPASS_EXPECTED_DEV_ID2 0
-# define COMPASS_EXPECTED_DEV_ID3 0
-#else
-# define COMPASS_EXPECTED_DEV_ID  0
-# define COMPASS_EXPECTED_DEV_ID2 0
-# define COMPASS_EXPECTED_DEV_ID3 0
 #endif
 
 class Compass
@@ -170,9 +151,8 @@ public:
     void learn_offsets(void);
 
     /// return true if the compass should be used for yaw calculations
-    bool use_for_yaw(void) const {
-        return _healthy[0] && _use_for_yaw;
-    }
+    bool use_for_yaw(uint8_t i) const;
+    bool use_for_yaw(void) const;
 
     /// Sets the local magnetic field declination.
     ///
@@ -269,12 +249,12 @@ protected:
     bool _healthy[COMPASS_MAX_INSTANCES];
     Vector3f _field[COMPASS_MAX_INSTANCES];     ///< magnetic field strength
 
-    AP_Int8 _orientation;
+    AP_Int8 _orientation[COMPASS_MAX_INSTANCES];
     AP_Vector3f _offset[COMPASS_MAX_INSTANCES];
     AP_Float _declination;
-    AP_Int8 _use_for_yaw;                       ///<enable use for yaw calculation
+    AP_Int8 _use_for_yaw[COMPASS_MAX_INSTANCES];///<enable use for yaw calculation
     AP_Int8 _auto_declination;                  ///<enable automatic declination code
-    AP_Int8 _external;                          ///<compass is external
+    AP_Int8 _external[COMPASS_MAX_INSTANCES];   ///<compass is external
 #if COMPASS_MAX_INSTANCES > 1
     AP_Int8 _primary;                           ///primary instance
     AP_Int32 _dev_id[COMPASS_MAX_INSTANCES];    // device id detected at init.  saved to eeprom when offsets are saved allowing ram & eeprom values to be compared as consistency check

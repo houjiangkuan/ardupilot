@@ -27,6 +27,9 @@ const AP_Param::GroupInfo AP_Mission::var_info[] PROGMEM = {
 
 extern const AP_HAL::HAL& hal;
 
+// storage object
+StorageAccess AP_Mission::_storage(StorageManager::StorageMission);
+
 ///
 /// public mission methods
 ///
@@ -180,6 +183,12 @@ void AP_Mission::update()
         if (_cmd_verify_fn(_nav_cmd)) {
             // market _nav_cmd as complete (it will be started on the next iteration)
             _flags.nav_cmd_loaded = false;
+            // immediately advance to the next mission command
+            if (!advance_current_nav_cmd()) {
+                // failure to advance nav command means mission has completed
+                complete();
+                return;
+            }
         }
     }
 
@@ -377,8 +386,6 @@ bool AP_Mission::set_current_cmd(uint16_t index)
 ///     true is return if successful
 bool AP_Mission::read_cmd_from_storage(uint16_t index, Mission_Command& cmd) const
 {
-    uint16_t pos_in_storage;    // position in storage from where we will read the next byte
-
     // exit immediately if index is beyond last command but we always let cmd #0 (i.e. home) be read
     if (index > (unsigned)_cmd_total && index != 0) {
         return false;
@@ -394,11 +401,11 @@ bool AP_Mission::read_cmd_from_storage(uint16_t index, Mission_Command& cmd) con
         // Find out proper location in memory by using the start_byte position + the index
         // we can load a command, we don't process it yet
         // read WP position
-        pos_in_storage = _storage_start + 4 + (index * AP_MISSION_EEPROM_COMMAND_SIZE);
+        uint16_t pos_in_storage = 4 + (index * AP_MISSION_EEPROM_COMMAND_SIZE);
 
-        cmd.id = hal.storage->read_byte(pos_in_storage);
-        cmd.p1 = hal.storage->read_word(pos_in_storage+1);
-        hal.storage->read_block(cmd.content.bytes, pos_in_storage+3, 12);
+        cmd.id = _storage.read_byte(pos_in_storage);
+        cmd.p1 = _storage.read_uint16(pos_in_storage+1);
+        _storage.read_block(cmd.content.bytes, pos_in_storage+3, 12);
 
         // set command's index to it's position in eeprom
         cmd.index = index;
@@ -414,16 +421,16 @@ bool AP_Mission::read_cmd_from_storage(uint16_t index, Mission_Command& cmd) con
 bool AP_Mission::write_cmd_to_storage(uint16_t index, Mission_Command& cmd)
 {
     // range check cmd's index
-    if (index >= _cmd_total_max) {
+    if (index >= num_commands_max()) {
         return false;
     }
 
     // calculate where in storage the command should be placed
-    uint16_t pos_in_storage = _storage_start + 4 + (index * AP_MISSION_EEPROM_COMMAND_SIZE);
+    uint16_t pos_in_storage = 4 + (index * AP_MISSION_EEPROM_COMMAND_SIZE);
 
-    hal.storage->write_byte(pos_in_storage, cmd.id);
-    hal.storage->write_word(pos_in_storage+1, cmd.p1);
-    hal.storage->write_block(pos_in_storage+3, cmd.content.bytes, 12);
+    _storage.write_byte(pos_in_storage, cmd.id);
+    _storage.write_uint16(pos_in_storage+1, cmd.p1);
+    _storage.write_block(pos_in_storage+3, cmd.content.bytes, 12);
 
     // remember when the mission last changed
     _last_change_time_ms = hal.scheduler->millis();
@@ -459,7 +466,18 @@ bool AP_Mission::mavlink_to_mission_cmd(const mavlink_mission_item_t& packet, AP
 
     case MAV_CMD_NAV_WAYPOINT:                          // MAV ID: 16
         copy_location = true;
-        cmd.p1 = packet.param1;                         // delay at waypoint in seconds
+        /*
+          the 15 byte limit means we can't fit both delay and radius
+          in the cmd structure. When we expand the mission structure
+          we can do this properly
+         */
+#if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
+        // acceptance radius in meters
+        cmd.p1 = packet.param2;
+#else
+        // delay at waypoint in seconds
+        cmd.p1 = packet.param1;                         
+#endif
         break;
 
     case MAV_CMD_NAV_LOITER_UNLIM:                      // MAV ID: 17
@@ -607,6 +625,11 @@ bool AP_Mission::mavlink_to_mission_cmd(const mavlink_mission_item_t& packet, AP
         cmd.p1 = packet.param1;                         // normal=0 inverted=1
         break;
 
+    case MAV_CMD_DO_GRIPPER:                            // MAV ID: 211
+        cmd.content.gripper.num = packet.param1;        // gripper number
+        cmd.content.gripper.action = packet.param2;     // action 0=release, 1=grab.  See GRIPPER_ACTION enum
+        break;
+
     default:
         // unrecognised command
         return false;
@@ -707,7 +730,13 @@ bool AP_Mission::mission_cmd_to_mavlink(const AP_Mission::Mission_Command& cmd, 
 
     case MAV_CMD_NAV_WAYPOINT:                          // MAV ID: 16
         copy_location = true;
-        packet.param1 = cmd.p1;                         // delay at waypoint in seconds
+#if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
+        // acceptance radius in meters
+        packet.param2 = cmd.p1;
+#else
+        // delay at waypoint in seconds
+        packet.param1 = cmd.p1;
+#endif
         break;
 
     case MAV_CMD_NAV_LOITER_UNLIM:                      // MAV ID: 17
@@ -780,7 +809,7 @@ bool AP_Mission::mission_cmd_to_mavlink(const AP_Mission::Mission_Command& cmd, 
 
     case MAV_CMD_CONDITION_CHANGE_ALT:                  // MAV ID: 113
         copy_alt = true;                                // only altitude is used
-        packet.param1 = cmd.content.location.alt / 100.0f;  // climb/descent rate converted from cm/s to m/s.  To-Do: store in proper climb_rate structure
+        packet.param1 = cmd.content.location.lat / 100.0f;  // climb/descent rate converted from cm/s to m/s.  To-Do: store in proper climb_rate structure
         break;
 
     case MAV_CMD_CONDITION_DISTANCE:                    // MAV ID: 114
@@ -862,6 +891,11 @@ bool AP_Mission::mission_cmd_to_mavlink(const AP_Mission::Mission_Command& cmd, 
 
     case MAV_CMD_DO_INVERTED_FLIGHT:                    // MAV ID: 210
         packet.param1 = cmd.p1;                         // normal=0 inverted=1
+        break;
+
+    case MAV_CMD_DO_GRIPPER:                            // MAV ID: 211
+        packet.param1 = cmd.content.gripper.num;        // gripper number
+        packet.param2 = cmd.content.gripper.action;     // action 0=release, 1=grab.  See GRIPPER_ACTION enum
         break;
 
     default:
@@ -1193,12 +1227,22 @@ void AP_Mission::increment_jump_times_run(Mission_Command& cmd)
 // command list will be cleared if they do not match
 void AP_Mission::check_eeprom_version()
 {
-    uint32_t eeprom_version = hal.storage->read_dword(_storage_start);
+    uint32_t eeprom_version = _storage.read_uint32(0);
 
     // if eeprom version does not match, clear the command list and update the eeprom version
     if (eeprom_version != AP_MISSION_EEPROM_VERSION) {
         if (clear()) {
-            hal.storage->write_dword(_storage_start, AP_MISSION_EEPROM_VERSION);
+            _storage.write_uint32(0, AP_MISSION_EEPROM_VERSION);
         }
     }
 }
+
+/*
+  return total number of commands that can fit in storage space
+ */
+uint16_t AP_Mission::num_commands_max(void) const
+{
+    // -4 to remove space for eeprom version number
+    return (_storage.size() - 4) / AP_MISSION_EEPROM_COMMAND_SIZE;
+}
+

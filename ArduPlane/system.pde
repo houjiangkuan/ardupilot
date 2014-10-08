@@ -104,8 +104,8 @@ static void init_ardupilot()
     // init baro before we start the GCS, so that the CLI baro test works
     barometer.init();
 
-    // initialise sonar
-    init_sonar();
+    // initialise rangefinder
+    init_rangefinder();
 
     // initialise battery monitoring
     battery.init();
@@ -266,6 +266,7 @@ static void startup_ground(void)
     // mid-flight, so set the serial ports non-blocking once we are
     // ready to fly
     hal.uartA->set_blocking_writes(false);
+    hal.uartB->set_blocking_writes(false);
     hal.uartC->set_blocking_writes(false);
     if (hal.uartD != NULL) {
         hal.uartD->set_blocking_writes(false);
@@ -296,6 +297,9 @@ static void set_mode(enum FlightMode mode)
     // don't cross-track when starting a mission
     auto_state.next_wp_no_crosstrack = true;
 
+    // zero locked course
+    steer_state.locked_course_err = 0;
+
     // set mode
     previous_mode = control_mode;
     control_mode = mode;
@@ -304,6 +308,13 @@ static void set_mode(enum FlightMode mode)
         // restore last gains
         autotune_restore();
     }
+
+    // zero initial pitch and highest airspeed on mode change
+    auto_state.highest_airspeed = 0;
+    auto_state.initial_pitch_cd = ahrs.pitch_sensor;
+
+    // disable taildrag takeoff on mode change
+    auto_state.fbwa_tdrag_takeoff_mode = false;
 
     switch(control_mode)
     {
@@ -350,8 +361,6 @@ static void set_mode(enum FlightMode mode)
     case AUTO:
         auto_throttle_mode = true;
         next_WP_loc = prev_WP_loc = current_loc;
-        auto_state.highest_airspeed = 0;
-        auto_state.initial_pitch_cd = ahrs.pitch_sensor;
         // start or resume the mission, based on MIS_AUTORESET
         mission.start_or_resume();
         break;
@@ -384,6 +393,31 @@ static void set_mode(enum FlightMode mode)
     rollController.reset_I();
     pitchController.reset_I();
     yawController.reset_I();    
+    steerController.reset_I();    
+}
+
+/*
+  set_mode() wrapper for MAVLink SET_MODE
+ */
+static bool mavlink_set_mode(uint8_t mode)
+{
+    switch (mode) {
+    case MANUAL:
+    case CIRCLE:
+    case STABILIZE:
+    case TRAINING:
+    case ACRO:
+    case FLY_BY_WIRE_A:
+    case AUTOTUNE:
+    case FLY_BY_WIRE_B:
+    case CRUISE:
+    case AUTO:
+    case RTL:
+    case LOITER:
+        set_mode((enum FlightMode)mode);
+        return true;
+    }
+    return false;
 }
 
 // exit_mode - perform any cleanup required when leaving a flight mode
@@ -456,8 +490,8 @@ static void check_short_failsafe()
 static void startup_INS_ground(bool do_accel_init)
 {
 #if HIL_MODE != HIL_MODE_DISABLED
-    while (!barometer.healthy) {
-        // the barometer becomes healthy when we get the first
+    while (barometer.get_last_update() == 0) {
+        // the barometer begins updating when we get the first
         // HIL_STATE message
         gcs_send_text_P(SEVERITY_LOW, PSTR("Waiting for first HIL_STATE message"));
         delay(1000);

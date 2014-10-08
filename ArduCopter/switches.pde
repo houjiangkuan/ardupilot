@@ -165,8 +165,6 @@ static void do_aux_switch_function(int8_t ch_function, uint8_t ch_flag)
             // flip if switch is on, positive throttle and we're actually flying
             if(ch_flag == AUX_SWITCH_HIGH) {
                 set_mode(FLIP);
-            }else{
-                flip_stop();
             }
             break;
 
@@ -312,16 +310,12 @@ static void do_aux_switch_function(int8_t ch_function, uint8_t ch_flag)
         case AUX_SWITCH_EPM:
             switch(ch_flag) {
                 case AUX_SWITCH_LOW:
-                    epm.off();
-                    Log_Write_Event(DATA_EPM_OFF);
-                    break;
-                case AUX_SWITCH_MIDDLE:
-                    epm.neutral();
-                    Log_Write_Event(DATA_EPM_NEUTRAL);
+                    epm.release();
+                    Log_Write_Event(DATA_EPM_RELEASE);
                     break;
                 case AUX_SWITCH_HIGH:
-                    epm.on();
-                    Log_Write_Event(DATA_EPM_ON);
+                    epm.grab();
+                    Log_Write_Event(DATA_EPM_GRAB);
                     break;
             }
             break;

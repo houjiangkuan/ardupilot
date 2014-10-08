@@ -197,9 +197,9 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @DisplayName: Receiver RSSI voltage range
     // @Description: Receiver RSSI voltage range
     // @Units: Volt
-    // @Values: 3.3:3.3V, 5.0:5V
+    // @Values: 3.3:3.3V, 5:5V
     // @User: Standard
-    GSCALAR(rssi_range,          "RSSI_RANGE",         5.0),
+    GSCALAR(rssi_range,          "RSSI_RANGE",         5.0f),
 
     // @Param: WP_YAW_BEHAVIOR
     // @DisplayName: Yaw behaviour during missions
@@ -295,6 +295,15 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Increment: 1
     GSCALAR(throttle_mid,        "THR_MID",    THR_MID_DEFAULT),
 
+    // @Param: THR_DZ
+    // @DisplayName: Throttle deadzone
+    // @Description: The deadzone above and below mid throttle.  Used in AltHold, Loiter, PosHold flight modes
+    // @User: Standard
+    // @Range: 0 300
+    // @Units: pwm
+    // @Increment: 1
+    GSCALAR(throttle_deadzone,  "THR_DZ",    THR_DZ_DEFAULT),
+
     // @Param: FLTMODE1
     // @DisplayName: Flight Mode 1
     // @Description: Flight mode when Channel 5 pwm is <= 1230
@@ -346,7 +355,7 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: LOG_BITMASK
     // @DisplayName: Log bitmask
     // @Description: 2 byte bitmap of log types to enable
-    // @Values: 830:Default,894:Default+RCIN,958:Default+IMU,1854:Default+Motors,-6146:NearlyAll,0:Disabled
+    // @Values: 830:Default,894:Default+RCIN,958:Default+IMU,1854:Default+Motors,-6146:NearlyAll,-22530:All,0:Disabled
     // @User: Standard
     GSCALAR(log_bitmask,    "LOG_BITMASK",          DEFAULT_LOG_BITMASK),
 
@@ -381,7 +390,7 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: FRAME
     // @DisplayName: Frame Orientation (+, X or V)
     // @Description: Controls motor mixing for multicopters.  Not used for Tri or Traditional Helicopters.
-    // @Values: 0:Plus, 1:X, 2:V, 3:H, 4:V-Tail, 10:Y6B (New)
+    // @Values: 0:Plus, 1:X, 2:V, 3:H, 4:V-Tail, 5:A-Tail, 10:Y6B (New)
     // @User: Standard
     GSCALAR(frame_orientation, "FRAME",             AP_MOTORS_X_FRAME),
 
@@ -442,14 +451,14 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: LAND_REPOSITION
     // @DisplayName: Land repositioning
     // @Description: Enables user input during LAND mode, the landing phase of RTL, and auto mode landings.
-    // @Values: 0:No repositiong, 1:Repositioning
+    // @Values: 0:No repositioning, 1:Repositioning
     // @User: Advanced
     GSCALAR(land_repositioning, "LAND_REPOSITION",     LAND_REPOSITION_DEFAULT),
 
     // @Param: EKF_CHECK_THRESH
     // @DisplayName: EKF and InertialNav check compass and velocity variance threshold
     // @Description: Allows setting the maximum acceptable compass and velocity variance (0 to disable check)
-    // @Values: 0:Disabled, 0.6:Default, 1.0:Relaxed
+    // @Values: 0:Disabled, 0.8:Default, 1.0:Relaxed
     // @User: Advanced
     GSCALAR(ekfcheck_thresh, "EKF_CHECK_THRESH",    EKFCHECK_THRESHOLD_DEFAULT),
 
@@ -586,13 +595,20 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @User: Advanced
     GSCALAR(acro_trainer,   "ACRO_TRAINER",     ACRO_TRAINER_LIMITED),
 
+    // @Param: ACRO_EXPO
+    // @DisplayName: Acro Expo
+    // @Description: Acro roll/pitch Expo to allow faster rotation when stick at edges
+    // @Values: 0:Disabled,0.1:Very Low,0.2:Low,0.3:Medium,0.4:High,0.5:Very High
+    // @User: Advanced
+    GSCALAR(acro_expo,  "ACRO_EXPO",    ACRO_EXPO_DEFAULT),
+
     // PID controller
     //---------------
 
     // @Param: RATE_RLL_P
     // @DisplayName: Roll axis rate controller P gain
     // @Description: Roll axis rate controller P gain.  Converts the difference between desired roll rate and actual roll rate into a motor speed output
-    // @Range: 0.08 0.20
+    // @Range: 0.08 0.25
     // @Increment: 0.005
     // @User: Standard
 
@@ -626,7 +642,7 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: RATE_PIT_P
     // @DisplayName: Pitch axis rate controller P gain
     // @Description: Pitch axis rate controller P gain.  Converts the difference between desired pitch rate and actual pitch rate into a motor speed output
-    // @Range: 0.08 0.20
+    // @Range: 0.08 0.25
     // @Increment: 0.005
     // @User: Standard
 
@@ -660,14 +676,14 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: RATE_YAW_P
     // @DisplayName: Yaw axis rate controller P gain
     // @Description: Yaw axis rate controller P gain.  Converts the difference between desired yaw rate and actual yaw rate into a motor speed output
-    // @Range: 0.150 0.250
+    // @Range: 0.150 0.50
     // @Increment: 0.005
     // @User: Standard
 
     // @Param: RATE_YAW_I
     // @DisplayName: Yaw axis rate controller I gain
     // @Description: Yaw axis rate controller I gain.  Corrects long-term difference in desired yaw rate vs actual yaw rate
-    // @Range: 0.010 0.020
+    // @Range: 0.010 0.05
     // @Increment: 0.01
     // @User: Standard
 
@@ -792,7 +808,7 @@ const AP_Param::Info var_info[] PROGMEM = {
     // @Param: THR_ACCEL_IMAX
     // @DisplayName: Throttle acceleration controller I gain maximum
     // @Description: Throttle acceleration controller I gain maximum.  Constrains the maximum pwm that the I term will generate
-    // @Range: 0 500
+    // @Range: 0 1000
     // @Units: Percent*10
     // @User: Standard
 
@@ -986,7 +1002,7 @@ const AP_Param::Info var_info[] PROGMEM = {
 
     // @Group: BRD_
     // @Path: ../libraries/AP_BoardConfig/AP_BoardConfig.cpp
-    GOBJECT(BoardConfig,            "BRD_",       AP_BoardConfig),    
+    GOBJECT(BoardConfig,            "BRD_",       AP_BoardConfig),
 
 #if SPRAYER == ENABLED
     // @Group: SPRAY_
@@ -1124,7 +1140,7 @@ const AP_Param::ConversionInfo conversion_table[] PROGMEM = {
 static void load_parameters(void)
 {
     if (!AP_Param::check_var_info()) {
-        cliSerial->printf_P(PSTR("Bad var table\n"));        
+        cliSerial->printf_P(PSTR("Bad var table\n"));
         hal.scheduler->panic(PSTR("Bad var table"));
     }
 
