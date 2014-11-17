@@ -9,6 +9,13 @@
 #define ENABLED                 1
 #define DISABLED                0
 
+#define MASK_TILT           (1<<0)
+#define MASK_ROLL           (1<<1)
+#define MASK_YAW            (1<<2)
+#define MASK_RETRACT        (1<<3)
+
+
+
 #if defined( __AVR_ATmega1280__ )
  # define MNT_JSTICK_SPD_OPTION DISABLED // Allow RC joystick to control the speed of the mount movements instead of the position of the mount
  # define MNT_RETRACT_OPTION    DISABLED // Use a servo to retract the mount inside the fuselage (i.e. for landings)
@@ -213,6 +220,24 @@ const AP_Param::GroupInfo AP_Mount::var_info[] PROGMEM = {
     AP_GROUPINFO("JSTICK_SPD",  16, AP_Mount, _joystick_speed, 0),
 #endif
 
+    // @Param: LEAD_RLL
+    // @DisplayName: Roll stabilization lead time
+    // @Description: Causes the servo angle output to lead the current angle of the vehicle by some amount of time based on current angular rate, compensating for servo delay. Increase until the servo is responsive but doesn't overshoot. Does nothing with pan stabilization enabled.
+    // @Units: Seconds
+    // @Range: 0.0 0.2
+    // @Increment: .005
+    // @User: Standard
+    AP_GROUPINFO("LEAD_RLL", 17, AP_Mount, _roll_stb_lead, 0.0f),
+
+    // @Param: LEAD_PTCH
+    // @DisplayName: Pitch stabilization lead time
+    // @Description: Causes the servo angle output to lead the current angle of the vehicle by some amount of time based on current angular rate. Increase until the servo is responsive but doesn't overshoot. Does nothing with pan stabilization enabled.
+    // @Units: Seconds
+    // @Range: 0.0 0.2
+    // @Increment: .005
+    // @User: Standard
+    AP_GROUPINFO("LEAD_PTCH", 18, AP_Mount, _pitch_stb_lead, 0.0f),
+
     AP_GROUPEND
 };
 
@@ -258,21 +283,31 @@ void
 AP_Mount::update_mount_type()
 {
 	bool have_roll, have_tilt, have_pan;
+
 	have_roll = RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount_roll) ||
 		RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount2_roll);
+
 	have_tilt = RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount_tilt) ||
 		RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount2_tilt);
+
 	have_pan = RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount_pan) ||
 		RC_Channel_aux::function_assigned(RC_Channel_aux::k_mount2_pan);
-    if (have_pan && have_tilt && !have_roll) {
+    
+    mount_axis_mask = 0;
+    
+    if (have_pan)
+        mount_axis_mask |= MASK_YAW;
+    if (have_tilt)
+        mount_axis_mask |= MASK_TILT;
+    if (have_roll)
+        mount_axis_mask |= MASK_ROLL;
+    
+    if (have_pan && have_tilt && !have_roll)
         _mount_type = k_pan_tilt;
-    }
-    if (!have_pan && have_tilt && have_roll) {
+    if (!have_pan && have_tilt && have_roll)
         _mount_type = k_tilt_roll;
-    }
-    if (have_pan && have_tilt && have_roll) {
+    if (have_pan && have_tilt && have_roll)
         _mount_type = k_pan_tilt_roll;
-    }
 }
 
 /// sets the servo angles for retraction, note angles are in degrees
@@ -580,8 +615,18 @@ AP_Mount::calc_GPS_target_angle(const struct Location *target)
     float GPS_vector_z = (target->alt-_current_loc->alt);                 // baro altitude(IN CM) should be adjusted to known home elevation before take off (Set altimeter).
     float target_distance = 100.0f*pythagorous2(GPS_vector_x, GPS_vector_y);      // Careful , centimeters here locally. Baro/alt is in cm, lat/lon is in meters.
     _roll_control_angle  = 0;
-    _tilt_control_angle  = atan2f(GPS_vector_z, target_distance);
-    _pan_control_angle   = atan2f(GPS_vector_x, GPS_vector_y);
+    
+    if (mount_axis_mask & MASK_TILT) {
+        _tilt_control_angle = atan2f(GPS_vector_z, target_distance);
+    } else {
+        _tilt_control_angle = 0;
+    }
+        
+    if (mount_axis_mask & MASK_YAW) {
+        _pan_control_angle = atan2f(GPS_vector_x, GPS_vector_y);
+    } else {
+        _pan_control_angle = 0;
+    }
 }
 
 /// Stabilizes mount relative to the Earth's frame
@@ -621,6 +666,21 @@ AP_Mount::stabilize()
         }
         if (_stab_tilt) {
             _tilt_angle -= degrees(_ahrs.pitch);
+        }
+
+        // Add lead filter.
+        const Vector3f &gyro = _ahrs.get_gyro();
+
+        if (_stab_roll && _roll_stb_lead != 0.0f && fabsf(_ahrs.pitch) < M_PI/3.0f) {
+            // Compute rate of change of euler roll angle
+            float roll_rate = gyro.x + (_ahrs.sin_pitch() / _ahrs.cos_pitch()) * (gyro.y * _ahrs.sin_roll() + gyro.z * _ahrs.cos_roll());
+            _roll_angle -= degrees(roll_rate) * _roll_stb_lead;
+        }
+
+        if (_stab_tilt && _pitch_stb_lead != 0.0f) {
+            // Compute rate of change of euler pitch angle
+            float pitch_rate = _ahrs.cos_pitch() * gyro.y - _ahrs.sin_roll() * gyro.z;
+            _tilt_angle -= degrees(pitch_rate) * _pitch_stb_lead;
         }
     }
 #endif

@@ -228,7 +228,7 @@ static NOINLINE void send_extended_status1(mavlink_channel_t chan)
     if (gps.status() >= AP_GPS::GPS_OK_FIX_3D) {
         control_sensors_health |= MAV_SYS_STATUS_SENSOR_GPS;
     }
-    if (!ins.get_gyro_health_all()) {
+    if (!ins.get_gyro_health_all() || (!g.skip_gyro_cal && !ins.gyro_calibrated_ok_all())) {
         control_sensors_health &= ~MAV_SYS_STATUS_SENSOR_3D_GYRO;
     }
     if (!ins.get_accel_health_all()) {
@@ -264,6 +264,16 @@ static NOINLINE void send_extended_status1(mavlink_channel_t chan)
         break;
     }
 #endif
+
+    if (rangefinder.num_sensors() > 0) {
+        control_sensors_present |= MAV_SYS_STATUS_SENSOR_LASER_POSITION;
+        if (g.rangefinder_landing) {
+            control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_LASER_POSITION;
+        }
+        if (rangefinder.healthy()) {
+            control_sensors_health |= MAV_SYS_STATUS_SENSOR_LASER_POSITION;            
+        }
+    }
 
     mavlink_msg_sys_status_send(
         chan,
@@ -643,6 +653,13 @@ bool GCS_MAVLINK::try_send_message(enum ap_message id)
 #endif
         break;
 
+    case MSG_CAMERA_FEEDBACK:
+#if CAMERA == ENABLED
+        CHECK_PAYLOAD_SIZE(CAMERA_FEEDBACK);
+        camera.send_feedback(chan, gps, ahrs, current_loc);
+#endif
+        break;
+
     case MSG_BATTERY2:
         CHECK_PAYLOAD_SIZE(BATTERY2);
         gcs[chan-MAVLINK_COMM_0].send_battery2(battery);
@@ -990,7 +1007,7 @@ void GCS_MAVLINK::handleMessage(mavlink_message_t* msg)
                 in_calibration = true;
                 init_barometer();
                 if (airspeed.enabled()) {
-                    zero_airspeed();
+                    zero_airspeed(false);
                 }
                 in_calibration = false;
             }
@@ -1106,6 +1123,33 @@ void GCS_MAVLINK::handleMessage(mavlink_message_t* msg)
                 // when packet.param1 == 3 we reboot to hold in bootloader
                 hal.scheduler->reboot(packet.param1 == 3);
                 result = MAV_RESULT_ACCEPTED;
+            }
+            break;
+
+        case MAV_CMD_DO_LAND_START:
+            result = MAV_RESULT_FAILED;
+            
+            // attempt to switch to next DO_LAND_START command in the mission
+            if (jump_to_landing_sequence()) {
+                result = MAV_RESULT_ACCEPTED;
+            } 
+            break;
+
+        case MAV_CMD_DO_GO_AROUND:
+            result = MAV_RESULT_FAILED;
+
+            //Not allowing go around at FLIGHT_LAND_FINAL stage on purpose --
+            //if plane is close to the ground a go around coudld be dangerous.
+            if (flight_stage == AP_SpdHgtControl::FLIGHT_LAND_APPROACH) {
+                //Just tell the autopilot we're done landing so it will 
+                //proceed to the next mission item.  If there is no next mission
+                //item the plane will head to home point and loiter.
+                auto_state.commanded_go_around = true;
+               
+                result = MAV_RESULT_ACCEPTED;
+                gcs_send_text_P(SEVERITY_HIGH,PSTR("Go around command accepted."));           
+            } else {
+                gcs_send_text_P(SEVERITY_HIGH,PSTR("Rejected go around command."));
             }
             break;
 
@@ -1424,13 +1468,12 @@ void GCS_MAVLINK::handleMessage(mavlink_message_t* msg)
 #if CAMERA == ENABLED
     case MAVLINK_MSG_ID_DIGICAM_CONFIGURE:
     {
-        camera.configure_msg(msg);
         break;
     }
 
     case MAVLINK_MSG_ID_DIGICAM_CONTROL:
     {
-        camera.control_msg(msg);
+        do_take_picture();
         break;
     }
 #endif // CAMERA == ENABLED
